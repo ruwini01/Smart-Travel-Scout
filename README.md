@@ -213,7 +213,7 @@ reasoning text. It cannot alter the factual content of any result.
 
 **Clone and install**
 ```bash
-git clone https://github.com/yourusername/smart-travel-scout.git
+git clone https://github.com/ruwini01/smart-travel-scout.git
 cd smart-travel-scout
 npm install
 ```

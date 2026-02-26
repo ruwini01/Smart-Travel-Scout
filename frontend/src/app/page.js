@@ -1,65 +1,224 @@
-import Image from "next/image";
+"use client";
+import { useState, useEffect, useRef, useCallback } from "react";
+import INVENTORY from "../../data/inventory.js";
+import matchInventory from "../../utils/matchInventory.js";
+
+import Navbar from "../../components/Navbar";
+import HeroSection from "../../components/HeroSection";
+import TrustStrip from "../../components/TrustStrip";
+import ResultsSection from "../../components/ResultsSection";
+import HowItWorks from "../../components/HowItWorks";
+import AboutSection from "../../components/AboutSection";
+import Footer from "../../components/Footer";
+import ContactModal from "../../components/ContactModal";
+import WishlistDrawer from "../../components/WishlistDrawer";
+import BookingModal from "../../components/BookingModal";
+import Toast from "../../components/Toast";
 
 export default function Home() {
+  //Search state
+  const [query, setQuery] = useState("");
+  const [allResults, setAllResults] = useState([]);
+  const [displayed, setDisplayed] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+
+  //Filter state
+  const [activePrice, setActivePrice] = useState(null);
+  const [activeTags, setActiveTags] = useState([]);
+
+  //UI state
+  const [wishlist, setWishlist] = useState([]);
+  const [modal, setModal] = useState(null); //contact|wishlist|booking: item
+  const [toast, setToast] = useState(null); //msg, icon
+
+  //Section refs for scroll navigation
+  const heroRef = useRef(null);
+  const resultsRef = useRef(null);
+  const howRef = useRef(null);
+  const aboutRef = useRef(null);
+
+  const scrollTo = (key) => {
+    const map = { results: resultsRef, howItWorks: howRef, about: aboutRef };
+    map[key]?.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
+  //Recompute displayed results when filters change
+  useEffect(() => {
+    let filtered = [...allResults];
+    if (activePrice) {
+      filtered = filtered.filter(i => i.price <= parseInt(activePrice));
+    }
+    if (activeTags.length > 0) {
+      filtered = filtered.filter(i => i.tags.some(t => activeTags.includes(t)));
+    }
+    setDisplayed(filtered);
+  }, [activePrice, activeTags, allResults]);
+
+  //Main search handler
+  const handleSearch = useCallback(async (q) => {
+    if (!q.trim()) return;
+
+    setIsLoading(true);
+    setHasSearched(true);
+    setActivePrice(null);
+    setActiveTags([]);
+
+    try {
+      //Call our API route → OpenAI → Zod validated results
+      const res = await fetch("/api/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: q.trim() }),
+      });
+
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+
+      const data = await res.json();
+      setAllResults(data.results);
+      setDisplayed(data.results);
+
+    } catch (err) {
+      console.error("Search failed, falling back to local matcher:", err);
+
+      //Fallback: use local keyword scorer if API fails
+      const fallback = matchInventory(q, INVENTORY);
+      setAllResults(fallback);
+      setDisplayed(fallback);
+
+      setToast({ msg: "Using offline matching — API unavailable", icon: "⚠️" });
+    } finally {
+      setIsLoading(false);
+      // Scroll to results after search
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+    }
+  }, []);
+
+  //Wishlist toggle
+  const handleWishlist = useCallback((id) => {
+    setWishlist(prev => {
+      const isLiked = prev.includes(id);
+      const next = isLiked ? prev.filter(x => x !== id) : [...prev, id];
+      const item = INVENTORY.find(i => i.id === id);
+      setToast(
+        isLiked
+          ? { msg: "Removed from wishlist", icon: "🗑️" }
+          : { msg: `${item?.title} saved to wishlist`, icon: "❤️" }
+      );
+      return next;
+    });
+  }, []);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
+    <>
+      {/*Top teal strip*/}
+      <div style={{
+        background: "#007B82", padding: "7px 24px",
+        display: "flex", alignItems: "center", justifyContent: "space-between"
+      }}>
+        <span style={{ color: "#fff", fontSize: 13 }}>
+          🌍 &nbsp;Real and remarkable small group trips — Sri Lanka curated experiences
+        </span>
+        <button
+          onClick={() => setModal("contact")}
+          style={{
+            color: "#fff", fontSize: 13, fontWeight: 700,
+            background: "rgba(255,255,255,.15)", borderRadius: 50,
+            padding: "3px 12px", cursor: "pointer", border: "none",
+            display: "flex", alignItems: "center", gap: 5, transition: "background .15s",
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = "rgba(255,255,255,.25)"}
+          onMouseLeave={e => e.currentTarget.style.background = "rgba(255,255,255,.15)"}
+        >
+          📞 Contact Us
+        </button>
+      </div>
+
+      {/*Navbar*/}
+      <Navbar
+        wishlistCount={wishlist.length}
+        onWishlist={() => setModal("wishlist")}
+        onContact={() => setModal("contact")}
+        scrollTo={scrollTo}
+      />
+
+      {/*Hero*/}
+      <div ref={heroRef}>
+        <HeroSection
+          query={query} setQuery={setQuery}
+          onSearch={handleSearch} isLoading={isLoading}
+          resultsRef={resultsRef}
         />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.js file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+      </div>
+
+      {/*Trust strip*/}
+      <TrustStrip />
+
+      {/*Results*/}
+      <ResultsSection
+        hasSearched={hasSearched} isLoading={isLoading}
+        allResults={allResults} displayed={displayed}
+        activePrice={activePrice} setActivePrice={setActivePrice}
+        activeTags={activeTags} setActiveTags={setActiveTags}
+        onReset={() => { setActivePrice(null); setActiveTags([]); }}
+        onView={item => setModal({ booking: item })}
+        wishlist={wishlist} onWishlist={handleWishlist}
+        onExampleSearch={() => {
+          setQuery("wildlife safari photography");
+          handleSearch("wildlife safari photography");
+        }}
+        resultsRef={resultsRef}
+      />
+
+      {/*How it works*/}
+      <div ref={howRef}>
+        <HowItWorks
+          scrollToHero={() => heroRef.current?.scrollIntoView({ behavior: "smooth" })}
+        />
+      </div>
+
+      {/*About*/}
+      <div ref={aboutRef}>
+        <AboutSection />
+      </div>
+
+      {/*Footer*/}
+      <Footer
+        onContact={() => setModal("contact")}
+        scrollTo={scrollTo}
+      />
+
+      {/*Modals*/}
+      {modal === "contact" && (
+        <ContactModal onClose={() => setModal(null)} />
+      )}
+
+      {modal === "wishlist" && (
+        <WishlistDrawer
+          items={INVENTORY}
+          wishlist={wishlist}
+          onClose={() => setModal(null)}
+          onRemove={handleWishlist}
+          onView={item => setModal({ booking: item })}
+        />
+      )}
+
+      {modal?.booking && (
+        <BookingModal
+          item={modal.booking}
+          onClose={() => setModal(null)}
+          onBooked={() => setToast({ msg: "Booking confirmed! 🎉", icon: "🎫" })}
+        />
+      )}
+
+      {/*Toast notifications*/}
+      {toast && (
+        <Toast
+          message={toast.msg}
+          icon={toast.icon}
+          onDone={() => setToast(null)}
+        />
+      )}
+    </>
   );
 }

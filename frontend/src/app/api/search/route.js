@@ -73,66 +73,86 @@ function setCache(query, results) {
 // skip the LLM entirely — returns in <50ms and costs $0
 // Only falls through to OpenAI for nuanced/ambiguous queries
 function earlyKeywordMatch(query) {
-    const q = query.toLowerCase();
+    const q = query.toLowerCase().trim();
 
-    // Extract price constraint from query e.g. "under $100"
-    const priceMatch = q.match(/under\s*\$?(\d+)/);
-    const maxPrice = priceMatch ? parseInt(priceMatch[1]) : null;
+    // Extract price ceiling from common patterns
+    const pricePatterns = [
+        /under\s*\$?(\d+)/,
+        /below\s*\$?(\d+)/,
+        /less\s+than\s*\$?(\d+)/,
+        /max\s*\$?(\d+)/,
+        /\$(\d+)\s*(?:budget|max|limit)/,
+        /budget\s*(?:of|is|:)?\s*\$?(\d+)/,
+    ];
 
-    const directMatches = INVENTORY.filter((item) => {
-        // Price hard filter
-        if (maxPrice !== null && item.price > maxPrice) return false;
-
-        const itemText = `${item.title} ${item.location} ${item.tags.join(" ")}`.toLowerCase();
-
-        // Exact tag match is a strong signal
-        const tagMatch = item.tags.some(
-            (t) => q.includes(t) || q.includes(t.replace("-", " "))
-        );
-
-        // Count significant word hits
-        const queryWords = q.split(" ").filter((w) => w.length > 3);
-        const hits = queryWords.filter((w) => itemText.includes(w)).length;
-
-        return tagMatch || hits >= 2;
-    });
-
-    // Only use early return for high-confidence, narrow matches
-    // If too many match, OpenAI can rank them better
-    if (directMatches.length > 0 && directMatches.length <= 3) {
-        return directMatches.map((item) => ({
-            id: item.id,
-            reason: `Directly matches your search for ${item.tags.join(", ")} in ${item.location}`,
-            matchStrength: "Great Match",
-        }));
+    let maxPrice = null;
+    for (const pattern of pricePatterns) {
+        const m = q.match(pattern);
+        if (m) { maxPrice = parseInt(m[1]); break; }
     }
 
-    // Fall through to OpenAI for nuanced understanding
+    // Only intercept pure budget-only queries
+    // e.g. "budget under $1000", "anything under $50"
+    // Strip all price/budget words — if almost nothing left, it's budget-only
+    const stripped = q
+        .replace(/under|below|budget|less|than|above|max|min|anything|something|show|me|options|experiences|trips?|travel|\$|\d+/g, "")
+        .trim();
+
+    const isBudgetOnly = maxPrice !== null && stripped.length < 4;
+
+    if (isBudgetOnly) {
+        const fitting = INVENTORY
+            .filter((item) => item.price <= maxPrice)
+            .sort((a, b) => a.price - b.price);
+
+        if (fitting.length > 0) {
+            return fitting.map((item) => ({
+                id: item.id,
+                reason: `Fits your $${maxPrice} budget at $${item.price}pp — includes ${item.tags.join(", ")}`,
+                matchStrength: item.price <= maxPrice * 0.5 ? "Top Pick" : "Great Match",
+            }));
+        }
+    }
+
+    // Everything else — let OpenAI handle for proper intent understanding
     return null;
 }
 
 // SYSTEM PROMPT
 // Strict grounding — inventory embedded directly in prompt
 // Short and precise to minimise token usage
-const SYSTEM_PROMPT = `You are a Sri Lanka travel matching assistant.
+const SYSTEM_PROMPT = `You are a Sri Lanka travel experience matching assistant.
 
-Your ONLY job is to match the user's query to experiences from this exact inventory:
+You have exactly 5 experiences in your inventory:
 ${JSON.stringify(INVENTORY, null, 2)}
 
-STRICT RULES:
-1. ONLY return IDs that exist in the list above (1, 2, 3, 4, 5)
-2. NEVER invent or suggest any destination not in the list
-3. Match based on: tag overlap, price constraints, location, vibe
-4. If user mentions a budget like "under $100", exclude items above that price
-5. Rank best matches first
-6. If nothing matches, return empty matches array
+YOUR JOB:
+The user will describe what they want in natural language. Your job is to find the BEST matching experiences from the inventory above based on similarity of intent, mood, tags, price, and location.
+
+MATCHING LOGIC:
+- "beach", "surf", "waves", "ocean", "chill by the water" → id 4 (Arugam Bay)
+- "history", "heritage", "ancient", "ruins", "colonial", "culture" → id 2 or 5
+- "wildlife", "animals", "safari", "leopard", "elephant", "nature" → id 3
+- "hiking", "tea", "mountain", "highlands", "cold", "misty", "nature" → id 1
+- "climbing", "rock", "fortress", "views", "ancient city" → id 5
+- Budget queries: exclude items above the stated price ceiling
+- Vibe mapping: "adventurous" → id 3, "relaxed/chill" → id 4, "cultural" → id 2 or 5, "scenic/nature" → id 1
+
+RULES:
+1. ONLY return IDs from the inventory: 1, 2, 3, 4, 5
+2. NEVER invent destinations outside this list
+3. ALWAYS return at least 1 result — pick the closest match even for vague queries
+4. If budget is mentioned, exclude items above that price — but still return the best of what fits
+5. Rank by relevance — best match first
+6. For vague or unusual queries, use your best judgement to map intent to the closest experience
+7. reason must clearly explain WHICH tag, price, location, or vibe matched and WHY
 
 Respond ONLY with this exact JSON — no extra text, no markdown:
 {
   "matches": [
     {
       "id": <number>,
-      "reason": "<one sentence why this matches>",
+      "reason": "<specific: which tag/price/location/vibe matched this query>",
       "matchStrength": "<Top Pick | Great Match | Possible Match>"
     }
   ]
